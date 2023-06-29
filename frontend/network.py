@@ -1,8 +1,15 @@
+import math
+import os
+from tempfile import TemporaryDirectory
+from typing import Tuple
+
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
+from torch import nn, Tensor
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.utils.data import DataLoader, dataset
 from torchvision import datasets
 from torchvision.transforms import ToTensor
+
 
 batch_size = 64
 
@@ -74,3 +81,5 @@ epochs = 5
 for t in range(epochs):
     # Begin training and testing
     print(t)
+
+
