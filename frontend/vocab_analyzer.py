@@ -55,7 +55,7 @@ class PositionalEncoding(nn.Module):
         pe[:, 0, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
@@ -88,12 +88,12 @@ def batchify(data: Tensor, bsz: int) -> Tensor:
 
 batch_size = 20
 eval_batch_size = 10
+bptt = 35
 
 train_data = batchify(train_data, batch_size)
 val_data = batchify(val_data, eval_batch_size)
 test_data = batchify(test_data, eval_batch_size)
 
-bptt = 35
 def get_batch(source: Tensor, i: int) -> Tuple[Tensor, Tensor]:
     seq_len = min(bptt, len(source) - 1 - i)
     data = source[i:i+seq_len]
@@ -116,9 +116,8 @@ epochs = 3
 best_val_loss = float('inf')
 
 
-
 # Seperate Training model than in network.py
-def train(model: nn.Module):
+def train(model: nn.Module) -> None:
     model.train()
     total_loss = 0
     log_interval = 200
@@ -133,7 +132,7 @@ def train(model: nn.Module):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
 
         total_loss += loss.item()
