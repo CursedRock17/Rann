@@ -19,8 +19,8 @@ import matplotlib.ticker as ticker
 def findFiles(path): return glob.glob(path)
 
 
-all_letters = string.ascii_letters + ".,;'"
-n_letters = len(all_letters)
+all_letters = string.ascii_letters + ".,;'-"
+n_letters = len(all_letters) + 1
 
 
 def unicodeToAscii(s):
@@ -74,30 +74,26 @@ def lineToTensor(line):
 class RNN(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(RNN, self).__init__()
-
         self.hidden_size = hidden_size
 
-        self.i2h = nn.Linear(input_size + hidden_size, hidden_size)
-        self.h2o = nn.Linear(hidden_size, output_size)
+        self.i2h = nn.Linear(n_categories + input_size + hidden_size, hidden_size)
+        self.i2o = nn.Linear(n_categories + input_size + hidden_size, output_size)
+        self.o2o = nn.Linear(hidden_size + output_size, output_size)
+        self.dropout = nn.Dropout(0.1)
         self.softmax = nn.LogSoftmax(dim=1)
 
-    def forward(self, input, hidden):
-        combined = torch.cat((input, hidden), 1)
-        hidden = self.i2h(combined)
-        output = self.h2o(hidden)
+    def forward(self, category, input, hidden):
+        input_combined = torch.cat((category, input, hidden), 1)
+        hidden = self.i2h(input_combined)
+        output = self.i2o(input_combined)
+        output_combined = torch.cat((hidden, output), 1)
+        output = self.o2o(output_combined)
+        output = self.dropout(output)
         output = self.softmax(output)
         return output, hidden
 
     def initHidden(self):
         return torch.zeros(1, self.hidden_size)
-
-
-n_hidden = 128
-rnn = RNN(n_letters, n_hidden, n_categories)
-
-input = lineToTensor('Albert')
-hidden = torch.zeros(1, n_hidden)
-output, next_hidden = rnn(input[0], hidden)
 
 
 # Now begin making the training
@@ -107,55 +103,71 @@ def categoryFromOutput(output):
     return all_categories[category_i], category_i
 
 
-def randomChoice(l):
-    return l[random.randint(0, len(l) - 1)]
+def randomChoice(line):
+    return line[random.randint(0, len(line) - 1)]
+
+
+def randomTrainingPair():
+    category = randomChoice(all_categories)
+    line = randomChoice(category_lines[category])
+    return category, line
+
+
+# Defining the one hot(all 1s bit) Tensor
+def categoryTensor(category):
+    li = all_categories.index(category)
+    tensor = torch.zeros(1, n_categories)
+    tensor[0][li] = 1
+    return tensor
+
+
+def inputTensor(line):
+    tensor = torch.zeros(len(line), 1, n_letters)
+    for li in range(len(line)):
+        letter = line[li]
+        tensor[li][0][all_letters.find(letter)] = 1
+    return tensor
+
+
+# Tensor of second letter to end of target
+def targetTensor(line):
+    letter_indexes = [all_letters.find(line[li]) for li in range(1, len(line))]
+    letter_indexes.append(n_letters - 1)  # EOS
+    return torch.LongTensor(letter_indexes)
 
 
 def randomTrainingExample():
-    category = randomChoice(all_categories)
-    line = randomChoice(category_lines[category])
-    category_tensor = torch.tensor([all_categories.index(category)], dtype= torch.long)
-    line_tensor = lineToTensor(line)
-    return category, line, category_tensor, line_tensor
-
-
-for i in range(10):
-    category, line, category_tensor, line_tensor = randomTrainingExample()
-    print('category =', category, ' / line = ', line)
+    category, line = randomTrainingPair()
+    category_tensor = categoryTensor(category)
+    input_line_tensor = inputTensor(line)
+    target_line_tensor = targetTensor(line)
+    return category_tensor, input_line_tensor, target_line_tensor
 
 
 criterion = nn.NLLLoss()
-learning_rate = 0.005
+learning_rate = 0.0005
 
 
 # Each part of the loop will create an initial size, create input and taregt tensor, create a zeroed hidden state, read each letter in and keep hidden state for the next letter, compare the final output to the target, backpropagate, return the output and loss
-def train(category_tensor, line_tensor):
+def train(category_tensor, input_line_tensor, target_line_tensor):
+    target_line_tensor.unsqueeze_(-1)
     hidden = rnn.initHidden()
 
     rnn.zero_grad()
 
-    for i in range(line_tensor.size()[0]):
-        output, hidden = rnn(line_tensor[i], hidden)
+    loss = torch.Tensor([0]) # you can also just simply use ``loss = 0``
 
-    loss = criterion(output, category_tensor)
+    for i in range(input_line_tensor.size(0)):
+        output, hidden = rnn(category_tensor, input_line_tensor[i], hidden)
+        temp_loss = criterion(output, target_line_tensor[i])
+        loss += temp_loss
+
     loss.backward()
 
-    # Add parameters' gradients to their values
     for p in rnn.parameters():
         p.data.add_(p.grad.data, alpha=-learning_rate)
 
-    return output, loss.item()
-
-
-# Now we can just train the network with 1000s of examples gaining the loss and output
-n_iters = 100000
-print_every = 5000
-plot_every = 1000
-
-
-# Keep track of losses for plotting
-current_loss = 0
-all_losses = []
+    return output, loss.item() / input_line_tensor.size(0)
 
 
 def timeSince(since):
@@ -166,26 +178,33 @@ def timeSince(since):
     return '%dm %ds' % (m, s)
 
 
+# Now we can just train the network with 1000s of examples gaining the loss and output
+rnn = RNN(n_letters, 128, n_letters)
+
+n_iters = 100000
+print_every = 5000
+plot_every = 500
+all_losses = []
+total_loss = 0 # Reset every ``plot_every`` ``iters``
+
 start = time.time()
 
 for iter in range(1, n_iters + 1):
-    category, line, category_tensor, line_tensor = randomTrainingExample()
-    output, loss = train(category_tensor, line_tensor)
-    current_loss += loss
+    output, loss = train(*randomTrainingExample())
+    total_loss += loss
 
     if iter % print_every == 0:
-        guess, guess_i = categoryFromOutput(output)
-        correct = 'yes' if guess == category else 'no (%s)' % category
-        print('%d, %d%% (%s) %0.4f %s / %s %s' % (iter, iter / n_iters * 100, timeSince(start), loss, line, guess, correct))
+        print('%s (%d %d%%) %.4f' % (timeSince(start), iter, iter / n_iters * 100, loss))
 
     if iter % plot_every == 0:
-        all_losses.append(current_loss / plot_every)
-        current_loss = 0
+        all_losses.append(total_loss / plot_every)
+        total_loss = 0
+
 
 plt.figure()
 plt.plot(all_losses)
 
-
+'''
 # Keep track of correct guesses in a confusion matrix
 confusion = torch.zeros(n_categories, n_categories)
 n_confusion = 10000
@@ -224,25 +243,41 @@ ax.set_yticklabels([''] + all_categories)
 
 ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
 ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+'''
 
 plt.show()
 
-
-def predict(input_line, n_predictions=3):
-    print('\n %s' % input_line)
-    with torch.no_grad():
-        output = evaluate(lineToTensor(input_line))
-
-        # Get top N n_categories
-        topv, topi = output.topk(n_predictions, 1, True)
-        predictions = []
-
-        for i in range(n_predictions):
-            value = topv[0][i].item()
-            category_index = topi[0][i].item()
-            print('(%.2f) %s' % (value, all_categories[category_index]))
-            predictions.append([value, all_categories[category_index]])
+max_length = 20
 
 
-predict('Tracey')
+def sample(category, start_letter='A'):
+    with torch.no_grad():  # No need to track history in sampling
+        category_tensor = categoryTensor(category)
+        input = inputTensor(start_letter)
+        hidden = rnn.initHidden()
+
+        output_name = start_letter
+
+        for i in range(max_length):
+            output, hidden = rnn(category_tensor, input[0], hidden)
+            topv, topi = output.topk(1)
+            topi = topi[0][0]
+            if topi == n_letters - 1:
+                break
+            else:
+                letter = all_letters[topi]
+                output_name += letter
+            input = inputTensor(letter)
+
+        return output_name
+
+
+# Get multiple samples from one category using multiple letters
+def samples(category, start_letters='ABC'):
+    for start_letter in start_letters:
+        print(sample(category, start_letter))
+
+samples('girl', 'ABCDEF')
+samples('boy', 'ABCDEF')
+
 
