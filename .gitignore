@@ -50,3 +50,5 @@ _deps
 [Bb]uild
 .vscode
 .cache
+
+data
